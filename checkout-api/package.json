@@ -10,8 +10,10 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "brace-expansion": "^2.1.2",
     "express": "^4.21.2",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "tar": "^7.5.19"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
