@@ -1,0 +1,169 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'checkout-api/**'
+      - '.github/workflows/cd.yml'
+
+env:
+  IMAGE: kabazbay/freshcart-checkout-api
+  VM_NAME: freshcart-dev-backend
+  VM_ZONE: us-central1-a
+
+jobs:
+  # ── Job 1: Build the image, scan it, push it ─────────────────────────────
+  build-scan-push:
+    name: Build → Scan → Push
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Derive short commit tag
+        id: meta
+        run: echo "tag=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }} \
+            -t ${{ env.IMAGE }}:latest \
+            checkout-api/
+
+      - name: Scan with Trivy — fail on CRITICAL or HIGH
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      - name: Push to Docker Hub
+        run: |
+          docker push ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
+          docker push ${{ env.IMAGE }}:latest
+
+  # ── Job 2: Deploy to staging automatically ───────────────────────────────
+  deploy-staging:
+    name: Deploy → Staging
+    needs: build-scan-push
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy image to VM via IAP tunnel
+        run: |
+          gcloud compute ssh ${{ env.VM_NAME }} \
+            --zone=${{ env.VM_ZONE }} \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --tunnel-through-iap \
+            --quiet \
+            --ssh-flag="-o StrictHostKeyChecking=no" \
+            --command="
+              docker stop checkout-api 2>/dev/null || true && \
+              docker rm checkout-api 2>/dev/null || true && \
+              docker pull ${{ env.IMAGE }}:${{ needs.build-scan-push.outputs.image_tag }} && \
+              docker run -d \
+                --name checkout-api \
+                --restart always \
+                -p 3000:3000 \
+                -e DATABASE_URL='${{ secrets.DATABASE_URL }}' \
+                -e NODE_ENV=production \
+                ${{ env.IMAGE }}:${{ needs.build-scan-push.outputs.image_tag }}
+            "
+
+      - name: Verify staging health
+        run: |
+          sleep 20
+          gcloud compute ssh ${{ env.VM_NAME }} \
+            --zone=${{ env.VM_ZONE }} \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --tunnel-through-iap \
+            --quiet \
+            --ssh-flag="-o StrictHostKeyChecking=no" \
+            --command="curl -sf localhost:3000/healthz || exit 1"
+
+  # ── Job 3: Promote exact staging image to production (approval gate) ─────
+  deploy-production:
+    name: Deploy → Production
+    needs: [build-scan-push, deploy-staging]
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Promote staging image to production
+        run: |
+          gcloud compute ssh ${{ env.VM_NAME }} \
+            --zone=${{ env.VM_ZONE }} \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --tunnel-through-iap \
+            --quiet \
+            --ssh-flag="-o StrictHostKeyChecking=no" \
+            --command="
+              docker stop checkout-api 2>/dev/null || true && \
+              docker rm checkout-api 2>/dev/null || true && \
+              docker pull ${{ env.IMAGE }}:${{ needs.build-scan-push.outputs.image_tag }} && \
+              docker run -d \
+                --name checkout-api \
+                --restart always \
+                -p 3000:3000 \
+                -e DATABASE_URL='${{ secrets.DATABASE_URL }}' \
+                -e NODE_ENV=production \
+                ${{ env.IMAGE }}:${{ needs.build-scan-push.outputs.image_tag }}
+            "
+
+      - name: Verify production health
+        run: |
+          sleep 20
+          gcloud compute ssh ${{ env.VM_NAME }} \
+            --zone=${{ env.VM_ZONE }} \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --tunnel-through-iap \
+            --quiet \
+            --ssh-flag="-o StrictHostKeyChecking=no" \
+            --command="curl -sf localhost:3000/healthz || exit 1"

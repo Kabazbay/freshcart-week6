@@ -1,0 +1,70 @@
+name: Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to roll back to (e.g. a1b2c3d)'
+        required: true
+        type: string
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options: [staging, production]
+
+env:
+  IMAGE: kabazbay/freshcart-checkout-api
+  VM_NAME: freshcart-dev-backend
+  VM_ZONE: us-central1-a
+
+jobs:
+  rollback:
+    name: Rollback ${{ inputs.environment }} → ${{ inputs.image_tag }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Roll back to ${{ inputs.image_tag }}
+        run: |
+          gcloud compute ssh ${{ env.VM_NAME }} \
+            --zone=${{ env.VM_ZONE }} \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --tunnel-through-iap \
+            --quiet \
+            --ssh-flag="-o StrictHostKeyChecking=no" \
+            --command="
+              docker stop checkout-api 2>/dev/null || true && \
+              docker rm checkout-api 2>/dev/null || true && \
+              docker pull ${{ env.IMAGE }}:${{ inputs.image_tag }} && \
+              docker run -d \
+                --name checkout-api \
+                --restart always \
+                -p 3000:3000 \
+                -e DATABASE_URL='${{ secrets.DATABASE_URL }}' \
+                -e NODE_ENV=production \
+                ${{ env.IMAGE }}:${{ inputs.image_tag }}
+            "
+
+      - name: Verify rollback health
+        run: |
+          sleep 20
+          gcloud compute ssh ${{ env.VM_NAME }} \
+            --zone=${{ env.VM_ZONE }} \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --tunnel-through-iap \
+            --quiet \
+            --ssh-flag="-o StrictHostKeyChecking=no" \
+            --command="curl -sf localhost:3000/healthz && echo 'ROLLBACK HEALTHY'"
