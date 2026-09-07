@@ -48,6 +48,7 @@ jobs:
           docker build \
             -t ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }} \
             -t ${{ env.IMAGE }}:latest \
+            -f checkout-api/Dockerfile \
             checkout-api/
 
       - name: Scan with Trivy — fail on CRITICAL or HIGH
