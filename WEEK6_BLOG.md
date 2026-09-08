@@ -30,7 +30,7 @@ To ship a code change:
 
 ## Section 2: The Pipeline — Five Jobs, Two Gates
 
-![Pipeline diagram showing: PR → CI → [main merge] → Build → Scan → Push → [auto] → Staging → [approval] → Production → [manual] → Rollback](docs/images/freshcart_pipeline_diagram.svg)
+![Pipeline diagram showing: PR → CI → [main merge] → Build → Scan → Push → [auto] → Staging → [approval] → Production → [manual] → Rollback](docs/images/freshcart_pipeline_diagram.png)
 
 ### Job 1: CI (Pull Request)
 **Trigger**: Every PR to main  

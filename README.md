@@ -55,13 +55,7 @@ cat .github/workflows/cd.yml
 **Outcome**: Instant recovery to any known-good tag
 
 ## Architecture
-![FreshCart CI/CD Pipeline](docs/images/freshcart_pipeline-diagram.png)
-
-On failure/manual request:
-     ↓
-Rollback (workflow_dispatch)
-Pull known-good tag, redeploy
-
+![FreshCart CI/CD Pipeline](docs/images/freshcart_pipeline_diagram.png)
 
 ## Key Decisions
 
@@ -98,13 +92,6 @@ Pull known-good tag, redeploy
 - **Change failure rate**: ↓ (Trivy scans + staging approval gate)
 - **MTTR**: <2 min (rollback via dispatch)
 - **Deployment frequency**: No longer limited by manual toil
-
-## Next Steps
-
-- [ ] Publish blog post to Medium
-- [ ] Archive Week 6 repo (separate from Week 5)
-- [ ] Week 7: Add production canary deployment
-- [ ] Week 8: Multi-environment config (dev/staging/prod)
 
 ## Resources
 
